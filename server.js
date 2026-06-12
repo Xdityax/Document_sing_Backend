@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function parseEnvFile(filePath) {
   if (!existsSync(filePath)) {
@@ -124,7 +125,10 @@ async function proxySupabaseAuth(pathname, body) {
   };
 }
 
-const server = createServer(async (request, response) => {
+async function handleRequest(request, response) {
+  const requestUrl = new URL(request.url || "/", "http://localhost");
+  const pathname = requestUrl.pathname;
+
   if (request.method === "OPTIONS") {
     response.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
@@ -135,16 +139,23 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "GET" && request.url === "/health") {
+  if (request.method === "GET" && (pathname === "/" || pathname === "/health")) {
     sendJson(response, 200, {
       ok: true,
       service: "document-signature-backend",
-      supabaseConfigured: isConfiguredValue(supabaseUrl) && isConfiguredValue(supabaseAnonKey)
+      supabaseConfigured: isConfiguredValue(supabaseUrl) && isConfiguredValue(supabaseAnonKey),
+      routes: [
+        "GET /",
+        "GET /health",
+        "POST /api/auth/login",
+        "POST /api/auth/register",
+        "POST /api/auth/logout"
+      ]
     });
     return;
   }
 
-  if (request.method === "POST" && request.url === "/api/auth/login") {
+  if (request.method === "POST" && pathname === "/api/auth/login") {
     try {
       const body = await readRequestBody(request);
       const { status, payload } = await proxySupabaseAuth("/token?grant_type=password", {
@@ -161,7 +172,7 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "POST" && request.url === "/api/auth/register") {
+  if (request.method === "POST" && pathname === "/api/auth/register") {
     try {
       const body = await readRequestBody(request);
       const { status, payload } = await proxySupabaseAuth("/signup", {
@@ -178,7 +189,7 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "POST" && request.url === "/api/auth/logout") {
+  if (request.method === "POST" && pathname === "/api/auth/logout") {
     sendJson(response, 200, { ok: true });
     return;
   }
@@ -186,9 +197,18 @@ const server = createServer(async (request, response) => {
   sendJson(response, 404, {
     error: "Not found"
   });
-});
+}
 
-server.listen(port, () => {
-  console.log(`Backend API running on http://localhost:${port}`);
-  console.log(`Health check: http://localhost:${port}/health`);
-});
+export default handleRequest;
+
+const currentFilePath = fileURLToPath(import.meta.url);
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === currentFilePath;
+
+if (isDirectRun) {
+  const server = createServer(handleRequest);
+
+  server.listen(port, () => {
+    console.log(`Backend API running on http://localhost:${port}`);
+    console.log(`Health check: http://localhost:${port}/health`);
+  });
+}
